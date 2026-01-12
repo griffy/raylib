@@ -525,17 +525,17 @@ int InitPlatform(void)
     // iOS is always fullscreen (use flags, not separate field)
     CORE.Window.flags |= FLAG_FULLSCREEN_MODE;
 
-    // Get screen dimensions
-    CGRect screenBounds = [[UIScreen mainScreen] bounds];
+    // Get screen dimensions from view bounds (more reliable than screen bounds for orientation)
+    CGRect viewBounds = platform.view ? platform.view.bounds : [[UIScreen mainScreen] bounds];
     CGFloat scale = [[UIScreen mainScreen] scale];
 
     // Screen size in points
-    CORE.Window.screen.width = (int)screenBounds.size.width;
-    CORE.Window.screen.height = (int)screenBounds.size.height;
+    CORE.Window.screen.width = (int)viewBounds.size.width;
+    CORE.Window.screen.height = (int)viewBounds.size.height;
 
     // Display/render size in pixels
-    CORE.Window.display.width = (int)(screenBounds.size.width * scale);
-    CORE.Window.display.height = (int)(screenBounds.size.height * scale);
+    CORE.Window.display.width = (int)(viewBounds.size.width * scale);
+    CORE.Window.display.height = (int)(viewBounds.size.height * scale);
 
     TRACELOG(LOG_INFO, "DISPLAY: Screen size: %d x %d (scale: %.1f)",
              CORE.Window.display.width, CORE.Window.display.height, scale);
@@ -710,6 +710,12 @@ static int InitGraphicsDevice(void)
         return -1;
     }
 
+    // Query actual EGL surface size (for debugging)
+    EGLint surfaceWidth, surfaceHeight;
+    eglQuerySurface(platform.device, platform.surface, EGL_WIDTH, &surfaceWidth);
+    eglQuerySurface(platform.device, platform.surface, EGL_HEIGHT, &surfaceHeight);
+    TRACELOG(LOG_INFO, "DISPLAY: EGL surface size: %d x %d", surfaceWidth, surfaceHeight);
+
     // Set swap interval (vsync)
     eglSwapInterval(platform.device, (CORE.Window.flags & FLAG_VSYNC_HINT) ? 1 : 0);
 
@@ -759,10 +765,8 @@ void _iosTouchEvent(int action, int index, float x, float y)
 {
     if (index >= MAX_TOUCH_POINTS) return;
 
-    // Scale to render coordinates
-    CGFloat scale = [[UIScreen mainScreen] scale];
-    x *= scale;
-    y *= scale;
+    // Touch coordinates come in as points from UIKit
+    // No scaling needed since we're using screen points for rendering
 
     switch (action)
     {
