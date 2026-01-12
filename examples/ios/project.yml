@@ -1,0 +1,65 @@
+name: RaylibIOSExample
+options:
+  bundleIdPrefix: com.raylib
+  deploymentTarget:
+    iOS: "12.0"
+  xcodeVersion: "14.0"
+
+settings:
+  base:
+    CLANG_CXX_LANGUAGE_STANDARD: c++17
+    CLANG_CXX_LIBRARY: libc++
+    GCC_C_LANGUAGE_STANDARD: c11
+
+targets:
+  RaylibIOSExample:
+    type: application
+    platform: iOS
+    sources:
+      # Example files
+      - path: AppDelegate.m
+      - path: game.c
+      # raylib source files - use rcore_objc.m wrapper to compile as Objective-C
+      # (required because iOS platform layer uses UIKit/Objective-C)
+      - path: ../../src/rcore_objc.m
+      - path: ../../src/rshapes.c
+      - path: ../../src/rtextures.c
+      - path: ../../src/rtext.c
+      - path: ../../src/rmodels.c
+      # - path: ../../src/raudio.c  # Disabled for now - needs Objective-C wrapper
+    settings:
+      base:
+        INFOPLIST_FILE: Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.raylib.iosExample
+        PRODUCT_NAME: RaylibIOSExample
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # Preprocessor defines
+        GCC_PREPROCESSOR_DEFINITIONS:
+          - PLATFORM_IOS=1
+          - GRAPHICS_API_OPENGL_ES3=1
+          - SUPPORT_GESTURES_SYSTEM=1
+          - $(inherited)
+        # Header search paths
+        HEADER_SEARCH_PATHS:
+          - $(PROJECT_DIR)/../../src
+          - $(PROJECT_DIR)/frameworks/simulator/MetalANGLE.framework/Headers
+          - $(inherited)
+        # Framework search paths - simulator only for testing
+        FRAMEWORK_SEARCH_PATHS:
+          - $(PROJECT_DIR)/frameworks/simulator
+          - $(inherited)
+        # Linker flags
+        OTHER_LDFLAGS:
+          - -ObjC
+          - -framework MetalANGLE
+          - -framework UIKit
+          - -framework QuartzCore
+          - -framework Foundation
+          - -framework Metal
+          - -framework AVFoundation
+          - -framework AudioToolbox
+          - $(inherited)
+    dependencies:
+      - framework: frameworks/simulator/MetalANGLE.framework
+        embed: true

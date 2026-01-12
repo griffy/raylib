@@ -522,8 +522,7 @@ void PollInputEvents(void)
 // Initialize platform: graphics, inputs and more
 int InitPlatform(void)
 {
-    // iOS is always fullscreen
-    CORE.Window.fullscreen = true;
+    // iOS is always fullscreen (use flags, not separate field)
     CORE.Window.flags |= FLAG_FULLSCREEN_MODE;
 
     // Get screen dimensions

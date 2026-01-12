@@ -1,0 +1,9 @@
+# Generated Xcode project (regenerate with: xcodegen generate)
+*.xcodeproj/
+
+# MetalANGLE frameworks (download from https://github.com/nicbarker/nicbarker/MetalANGLE/releases)
+frameworks/
+
+# Build artifacts
+build/
+DerivedData/

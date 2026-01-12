@@ -557,6 +557,8 @@ const char *TextFormat(const char *text, ...); // Formatting of text with variab
     #include "platforms/rcore_drm.c"
 #elif defined(PLATFORM_ANDROID)
     #include "platforms/rcore_android.c"
+#elif defined(PLATFORM_IOS)
+    #include "platforms/rcore_ios.c"
 #elif defined(PLATFORM_MEMORY)
     #include "platforms/rcore_memory.c"
 #else
