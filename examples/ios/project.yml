@@ -26,7 +26,7 @@ targets:
       - path: ../../src/rtextures.c
       - path: ../../src/rtext.c
       - path: ../../src/rmodels.c
-      # - path: ../../src/raudio.c  # Disabled for now - needs Objective-C wrapper
+      - path: ../../src/raudio_objc.m
     settings:
       base:
         INFOPLIST_FILE: Info.plist
@@ -40,14 +40,11 @@ targets:
           - GRAPHICS_API_OPENGL_ES3=1
           - SUPPORT_GESTURES_SYSTEM=1
           - $(inherited)
-        # Header search paths
+        # Header search paths - use both, compiler finds the right headers
         HEADER_SEARCH_PATHS:
           - $(PROJECT_DIR)/../../src
           - $(PROJECT_DIR)/frameworks/simulator/MetalANGLE.framework/Headers
-          - $(inherited)
-        # Framework search paths - simulator only for testing
-        FRAMEWORK_SEARCH_PATHS:
-          - $(PROJECT_DIR)/frameworks/simulator
+          - $(PROJECT_DIR)/frameworks/device/MetalANGLE.framework/Headers
           - $(inherited)
         # Linker flags
         OTHER_LDFLAGS:
@@ -60,6 +57,45 @@ targets:
           - -framework AVFoundation
           - -framework AudioToolbox
           - $(inherited)
-    dependencies:
-      - framework: frameworks/simulator/MetalANGLE.framework
-        embed: true
+        # Runtime search path
+        LD_RUNPATH_SEARCH_PATHS:
+          - "@executable_path/Frameworks"
+      configs:
+        Debug:
+          # Simulator-specific settings
+          FRAMEWORK_SEARCH_PATHS[sdk=iphonesimulator*]:
+            - $(PROJECT_DIR)/frameworks/simulator
+            - $(inherited)
+          # Device-specific settings
+          FRAMEWORK_SEARCH_PATHS[sdk=iphoneos*]:
+            - $(PROJECT_DIR)/frameworks/device
+            - $(inherited)
+        Release:
+          # Simulator-specific settings
+          FRAMEWORK_SEARCH_PATHS[sdk=iphonesimulator*]:
+            - $(PROJECT_DIR)/frameworks/simulator
+            - $(inherited)
+          # Device-specific settings
+          FRAMEWORK_SEARCH_PATHS[sdk=iphoneos*]:
+            - $(PROJECT_DIR)/frameworks/device
+            - $(inherited)
+    preBuildScripts:
+      - name: "Copy MetalANGLE Framework"
+        script: |
+          # Select correct framework based on platform
+          if [[ "$PLATFORM_NAME" == *"simulator"* ]]; then
+            FRAMEWORK_SRC="$PROJECT_DIR/frameworks/simulator/MetalANGLE.framework"
+          else
+            FRAMEWORK_SRC="$PROJECT_DIR/frameworks/device/MetalANGLE.framework"
+          fi
+
+          # Create destination directory
+          FRAMEWORK_DST="$BUILT_PRODUCTS_DIR/$FRAMEWORKS_FOLDER_PATH"
+          mkdir -p "$FRAMEWORK_DST"
+
+          # Copy framework (remove old one first to avoid issues)
+          rm -rf "$FRAMEWORK_DST/MetalANGLE.framework"
+          cp -R "$FRAMEWORK_SRC" "$FRAMEWORK_DST/"
+
+          echo "Copied MetalANGLE.framework for $PLATFORM_NAME"
+        basedOnDependencyAnalysis: false
