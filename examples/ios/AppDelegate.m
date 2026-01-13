@@ -11,6 +11,7 @@
 
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
+#import <Metal/Metal.h>
 
 // raylib iOS platform integration functions
 extern void SetPlatformWindow(void *window);
@@ -33,7 +34,7 @@ extern int GameInit(void);
 extern void StartGameThread(void);
 
 //----------------------------------------------------------------------------------
-// RaylibView - Custom UIView with CAEAGLLayer for ANGLE rendering
+// RaylibView - Custom UIView with CAMetalLayer for ANGLE rendering
 //----------------------------------------------------------------------------------
 @interface RaylibView : UIView
 @end
@@ -42,7 +43,8 @@ extern void StartGameThread(void);
 
 + (Class)layerClass
 {
-    return [CAEAGLLayer class];
+    // ANGLE uses Metal backend, so we need CAMetalLayer
+    return [CAMetalLayer class];
 }
 
 - (instancetype)initWithFrame:(CGRect)frame
@@ -52,8 +54,31 @@ extern void StartGameThread(void);
     {
         self.multipleTouchEnabled = YES;
         self.userInteractionEnabled = YES;
+
+        // Configure the Metal layer for ANGLE
+        CAMetalLayer *metalLayer = (CAMetalLayer *)self.layer;
+        metalLayer.opaque = YES;
+        metalLayer.contentsScale = [[UIScreen mainScreen] scale];
+        metalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+        metalLayer.framebufferOnly = NO;
+
+        // Get the default Metal device
+        metalLayer.device = MTLCreateSystemDefaultDevice();
+
+        self.backgroundColor = [UIColor blackColor];
     }
     return self;
+}
+
+- (void)layoutSubviews
+{
+    [super layoutSubviews];
+
+    // Update Metal layer drawable size when layout changes
+    CAMetalLayer *metalLayer = (CAMetalLayer *)self.layer;
+    CGFloat scale = [[UIScreen mainScreen] scale];
+    metalLayer.drawableSize = CGSizeMake(self.bounds.size.width * scale,
+                                          self.bounds.size.height * scale);
 }
 
 // Touch handling
