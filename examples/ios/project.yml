@@ -43,13 +43,16 @@ targets:
         # Header search paths - use both, compiler finds the right headers
         HEADER_SEARCH_PATHS:
           - $(PROJECT_DIR)/../../src
-          - $(PROJECT_DIR)/frameworks/simulator/MetalANGLE.framework/Headers
-          - $(PROJECT_DIR)/frameworks/device/MetalANGLE.framework/Headers
+          - $(PROJECT_DIR)/frameworks/simulator/libEGL.framework/Headers
+          - $(PROJECT_DIR)/frameworks/simulator/libGLESv2.framework/Headers
+          - $(PROJECT_DIR)/frameworks/device/libEGL.framework/Headers
+          - $(PROJECT_DIR)/frameworks/device/libGLESv2.framework/Headers
           - $(inherited)
         # Linker flags
         OTHER_LDFLAGS:
           - -ObjC
-          - -framework MetalANGLE
+          - -framework libEGL
+          - -framework libGLESv2
           - -framework UIKit
           - -framework QuartzCore
           - -framework Foundation
@@ -80,22 +83,24 @@ targets:
             - $(PROJECT_DIR)/frameworks/device
             - $(inherited)
     preBuildScripts:
-      - name: "Copy MetalANGLE Framework"
+      - name: "Copy ANGLE Frameworks"
         script: |
-          # Select correct framework based on platform
+          # Select correct frameworks based on platform
           if [[ "$PLATFORM_NAME" == *"simulator"* ]]; then
-            FRAMEWORK_SRC="$PROJECT_DIR/frameworks/simulator/MetalANGLE.framework"
+            FRAMEWORK_DIR="$PROJECT_DIR/frameworks/simulator"
           else
-            FRAMEWORK_SRC="$PROJECT_DIR/frameworks/device/MetalANGLE.framework"
+            FRAMEWORK_DIR="$PROJECT_DIR/frameworks/device"
           fi
 
           # Create destination directory
           FRAMEWORK_DST="$BUILT_PRODUCTS_DIR/$FRAMEWORKS_FOLDER_PATH"
           mkdir -p "$FRAMEWORK_DST"
 
-          # Copy framework (remove old one first to avoid issues)
-          rm -rf "$FRAMEWORK_DST/MetalANGLE.framework"
-          cp -R "$FRAMEWORK_SRC" "$FRAMEWORK_DST/"
+          # Copy frameworks (remove old ones first to avoid issues)
+          rm -rf "$FRAMEWORK_DST/libEGL.framework"
+          rm -rf "$FRAMEWORK_DST/libGLESv2.framework"
+          cp -R "$FRAMEWORK_DIR/libEGL.framework" "$FRAMEWORK_DST/"
+          cp -R "$FRAMEWORK_DIR/libGLESv2.framework" "$FRAMEWORK_DST/"
 
-          echo "Copied MetalANGLE.framework for $PLATFORM_NAME"
+          echo "Copied ANGLE frameworks (libEGL, libGLESv2) for $PLATFORM_NAME"
         basedOnDependencyAnalysis: false
