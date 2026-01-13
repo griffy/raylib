@@ -52,6 +52,7 @@
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
 #import <Foundation/Foundation.h>
+#import <Metal/Metal.h>
 
 #include <EGL/egl.h>                    // ANGLE EGL interface
 #include <EGL/eglext.h>
@@ -59,10 +60,29 @@
 #include <sys/time.h>
 #include <time.h>
 #include <errno.h>
+#include <unistd.h>                     // For chdir()
+#include <pthread.h>                    // For game thread
 
 //----------------------------------------------------------------------------------
 // Types and Structures Definition
 //----------------------------------------------------------------------------------
+
+// Touch event for thread-safe queue
+typedef struct {
+    int action;     // 0=began, 1=moved, 2=ended, 3=cancelled
+    int index;      // Touch index (0-9)
+    float x, y;     // Touch position in points
+} TouchEvent;
+
+// Thread-safe touch event queue
+#define TOUCH_QUEUE_SIZE 64
+typedef struct {
+    TouchEvent events[TOUCH_QUEUE_SIZE];
+    int head;                           // Read position
+    int tail;                           // Write position
+    pthread_mutex_t mutex;              // Thread safety
+} TouchEventQueue;
+
 typedef struct {
     // UIKit objects (stored as __unsafe_unretained to avoid ARC issues in struct)
     UIWindow *window;
@@ -75,6 +95,11 @@ typedef struct {
     EGLSurface surface;                 // Surface to draw on (EGL surface)
     EGLContext context;                 // Graphic context (EGL context)
     EGLConfig config;                   // Graphic config (EGL config)
+
+    // Threading
+    pthread_t gameThread;               // Game loop thread
+    bool gameThreadRunning;             // Game thread is active
+    TouchEventQueue touchQueue;         // Thread-safe touch event queue
 
     // State
     bool appActive;                     // App is in foreground
@@ -93,6 +118,168 @@ static PlatformData platform = { 0 };   // Platform specific data
 // Local Variables Definition
 //----------------------------------------------------------------------------------
 static void (*gameUpdateCallback)(void) = NULL;     // User game loop callback
+
+// Game entry point (defined by user's main.c via #define main GameInit)
+extern void GameInit(void);
+
+//----------------------------------------------------------------------------------
+// Touch Queue Functions (thread-safe)
+//----------------------------------------------------------------------------------
+
+// Initialize the touch event queue
+static void InitTouchQueue(void)
+{
+    platform.touchQueue.head = 0;
+    platform.touchQueue.tail = 0;
+    pthread_mutex_init(&platform.touchQueue.mutex, NULL);
+}
+
+// Push a touch event to the queue (called from main thread)
+static void PushTouchEvent(int action, int index, float x, float y)
+{
+    pthread_mutex_lock(&platform.touchQueue.mutex);
+
+    int nextTail = (platform.touchQueue.tail + 1) % TOUCH_QUEUE_SIZE;
+    if (nextTail != platform.touchQueue.head)  // Check if queue is full
+    {
+        TouchEvent *event = &platform.touchQueue.events[platform.touchQueue.tail];
+        event->action = action;
+        event->index = index;
+        event->x = x;
+        event->y = y;
+        platform.touchQueue.tail = nextTail;
+    }
+
+    pthread_mutex_unlock(&platform.touchQueue.mutex);
+}
+
+// Process a single touch event (updates CORE.Input)
+static void ProcessTouchEvent(TouchEvent *event)
+{
+    int action = event->action;
+    int index = event->index;
+    float x = event->x;
+    float y = event->y;
+
+    if (index >= MAX_TOUCH_POINTS) return;
+
+    switch (action)
+    {
+        case 0: // Touch began
+        {
+            CORE.Input.Touch.position[index] = (Vector2){ x, y };
+            CORE.Input.Touch.currentTouchState[index] = 1;
+            CORE.Input.Touch.pointId[index] = index;
+            CORE.Input.Touch.pointCount++;
+            if (CORE.Input.Touch.pointCount > MAX_TOUCH_POINTS)
+                CORE.Input.Touch.pointCount = MAX_TOUCH_POINTS;
+
+            // Map to mouse for single touch
+            if (index == 0)
+            {
+                CORE.Input.Mouse.currentPosition = (Vector2){ x, y };
+                CORE.Input.Mouse.currentButtonState[MOUSE_BUTTON_LEFT] = 1;
+            }
+
+#if defined(SUPPORT_GESTURES_SYSTEM)
+            GestureEvent gestureEvent = { 0 };
+            gestureEvent.touchAction = TOUCH_ACTION_DOWN;
+            gestureEvent.pointCount = CORE.Input.Touch.pointCount;
+            for (int i = 0; i < gestureEvent.pointCount; i++)
+            {
+                gestureEvent.pointId[i] = CORE.Input.Touch.pointId[i];
+                gestureEvent.position[i] = CORE.Input.Touch.position[i];
+            }
+            ProcessGestureEvent(gestureEvent);
+#endif
+        } break;
+
+        case 1: // Touch moved
+        {
+            CORE.Input.Touch.position[index] = (Vector2){ x, y };
+
+            if (index == 0)
+            {
+                CORE.Input.Mouse.previousPosition = CORE.Input.Mouse.currentPosition;
+                CORE.Input.Mouse.currentPosition = (Vector2){ x, y };
+            }
+
+#if defined(SUPPORT_GESTURES_SYSTEM)
+            GestureEvent gestureEvent = { 0 };
+            gestureEvent.touchAction = TOUCH_ACTION_MOVE;
+            gestureEvent.pointCount = CORE.Input.Touch.pointCount;
+            for (int i = 0; i < gestureEvent.pointCount; i++)
+            {
+                gestureEvent.pointId[i] = CORE.Input.Touch.pointId[i];
+                gestureEvent.position[i] = CORE.Input.Touch.position[i];
+            }
+            ProcessGestureEvent(gestureEvent);
+#endif
+        } break;
+
+        case 2: // Touch ended
+        case 3: // Touch cancelled
+        {
+            CORE.Input.Touch.position[index] = (Vector2){ x, y };
+            CORE.Input.Touch.currentTouchState[index] = 0;
+            CORE.Input.Touch.pointCount--;
+            if (CORE.Input.Touch.pointCount < 0) CORE.Input.Touch.pointCount = 0;
+
+            if (index == 0)
+            {
+                CORE.Input.Mouse.currentButtonState[MOUSE_BUTTON_LEFT] = 0;
+            }
+
+#if defined(SUPPORT_GESTURES_SYSTEM)
+            GestureEvent gestureEvent = { 0 };
+            gestureEvent.touchAction = TOUCH_ACTION_UP;
+            gestureEvent.pointCount = CORE.Input.Touch.pointCount;
+            for (int i = 0; i < gestureEvent.pointCount; i++)
+            {
+                gestureEvent.pointId[i] = CORE.Input.Touch.pointId[i];
+                gestureEvent.position[i] = CORE.Input.Touch.position[i];
+            }
+            ProcessGestureEvent(gestureEvent);
+#endif
+        } break;
+    }
+}
+
+// Drain all pending touch events from the queue (called from game thread)
+static void DrainTouchQueue(void)
+{
+    pthread_mutex_lock(&platform.touchQueue.mutex);
+
+    while (platform.touchQueue.head != platform.touchQueue.tail)
+    {
+        TouchEvent *event = &platform.touchQueue.events[platform.touchQueue.head];
+        ProcessTouchEvent(event);
+        platform.touchQueue.head = (platform.touchQueue.head + 1) % TOUCH_QUEUE_SIZE;
+    }
+
+    pthread_mutex_unlock(&platform.touchQueue.mutex);
+}
+
+//----------------------------------------------------------------------------------
+// Game Thread
+//----------------------------------------------------------------------------------
+
+// Game thread entry point
+static void *GameThreadFunc(void *arg)
+{
+    // Make EGL context current on this thread
+    if (platform.device != EGL_NO_DISPLAY)
+    {
+        eglMakeCurrent(platform.device, platform.surface, platform.surface, platform.context);
+        TRACELOG(LOG_INFO, "THREAD: EGL context made current on game thread");
+    }
+
+    // Run the game (this contains the while(!WindowShouldClose()) loop)
+    GameInit();
+
+    platform.gameThreadRunning = false;
+    return NULL;
+}
 
 //----------------------------------------------------------------------------------
 // Module Internal Functions Declaration
@@ -403,6 +590,10 @@ void SwapScreenBuffer(void)
     {
         eglSwapBuffers(platform.device, platform.surface);
     }
+
+    // On iOS, we need to run the run loop after swapping to process events
+    // and allow CADisplayLink to signal the next frame
+    PollInputEvents();
 }
 
 //----------------------------------------------------------------------------------
@@ -494,21 +685,11 @@ void PollInputEvents(void)
     // Reset last gamepad button/axis registered state
     CORE.Input.Gamepad.lastButtonPressed = 0;
 
+    // IMPORTANT: Register ALL previous states BEFORE processing new events
+    // This ensures IsMouseButtonPressed() etc. can detect state changes correctly
+
     // Register previous touch states
     for (int i = 0; i < MAX_TOUCH_POINTS; i++) CORE.Input.Touch.previousTouchState[i] = CORE.Input.Touch.currentTouchState[i];
-
-    // If using traditional game loop (no callback), wait for next frame
-    // This runs the iOS run loop until CADisplayLink signals a new frame
-    if (gameUpdateCallback == NULL)
-    {
-        platform.frameReady = false;
-        while (!platform.frameReady && platform.appActive && !CORE.Window.shouldClose)
-        {
-            // Run the run loop to process events (including CADisplayLink)
-            // Use kCFRunLoopDefaultMode which is compatible with NSRunLoopCommonModes
-            CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.016, true);
-        }
-    }
 
     // Register previous keys states
     for (int i = 0; i < MAX_KEYBOARD_KEYS; i++)
@@ -523,9 +704,9 @@ void PollInputEvents(void)
         CORE.Input.Mouse.previousButtonState[i] = CORE.Input.Mouse.currentButtonState[i];
     }
 
-    // iOS input events are processed via UIKit callbacks
-    // Touch events call _iosTouchEvent() which updates CORE.Input
-    // The run loop handles event processing automatically
+    // Drain touch events from the thread-safe queue
+    // Touch events are pushed by the main thread and processed here on the game thread
+    DrainTouchQueue();
 }
 
 //----------------------------------------------------------------------------------
@@ -535,6 +716,9 @@ void PollInputEvents(void)
 // Initialize platform: graphics, inputs and more
 int InitPlatform(void)
 {
+    // Initialize touch event queue for thread-safe touch handling
+    InitTouchQueue();
+
     // iOS is always fullscreen (use flags, not separate field)
     CORE.Window.flags |= FLAG_FULLSCREEN_MODE;
 
@@ -578,6 +762,8 @@ int InitPlatform(void)
     InitTimer();
 
     // Initialize storage system
+    // On iOS, change working directory to the app bundle's resource path
+    // so relative paths work correctly
     @autoreleasepool {
         NSString *resourcePath = [[NSBundle mainBundle] resourcePath];
         if (resourcePath != nil)
@@ -586,6 +772,11 @@ int InitPlatform(void)
             static char basePath[1024] = { 0 };
             strncpy(basePath, [resourcePath UTF8String], sizeof(basePath) - 1);
             CORE.Storage.basePath = basePath;
+
+            // Change working directory to bundle resource path
+            // This makes relative paths like "assets/title.png" work correctly
+            chdir(basePath);
+            TRACELOG(LOG_INFO, "STORAGE: Working directory set to: %s", basePath);
         }
         else
         {
@@ -672,13 +863,16 @@ static int InitGraphicsDevice(void)
     }
 
     // Create window surface from iOS view's layer
-    CAEAGLLayer *layer = (CAEAGLLayer *)platform.view.layer;
-    layer.opaque = YES;
-    layer.contentsScale = [[UIScreen mainScreen] scale];
-    layer.drawableProperties = @{
-        kEAGLDrawablePropertyRetainedBacking: @NO,
-        kEAGLDrawablePropertyColorFormat: kEAGLColorFormatRGBA8
-    };
+    // ANGLE uses Metal backend, so we expect CAMetalLayer
+    CAMetalLayer *layer = (CAMetalLayer *)platform.view.layer;
+    CGFloat scale = [[UIScreen mainScreen] scale];
+    layer.contentsScale = scale;
+
+    // Explicitly set the drawable size to match the expected render size
+    // This ensures the Metal framebuffer matches our expected dimensions
+    CGSize drawableSize = CGSizeMake(layer.bounds.size.width * scale,
+                                      layer.bounds.size.height * scale);
+    layer.drawableSize = drawableSize;
 
     platform.surface = eglCreateWindowSurface(platform.device, platform.config,
                                                (__bridge EGLNativeWindowType)layer, NULL);
@@ -723,7 +917,7 @@ static int InitGraphicsDevice(void)
         return -1;
     }
 
-    // Query actual EGL surface size (for debugging)
+    // Query actual EGL surface size
     EGLint surfaceWidth, surfaceHeight;
     eglQuerySurface(platform.device, platform.surface, EGL_WIDTH, &surfaceWidth);
     eglQuerySurface(platform.device, platform.surface, EGL_HEIGHT, &surfaceHeight);
@@ -763,113 +957,23 @@ static void CloseGraphicsDevice(void)
 // iOS Platform Callbacks (called from Objective-C)
 //----------------------------------------------------------------------------------
 
-// Frame callback - called by CADisplayLink
+// Frame callback - called by CADisplayLink on main thread
 void _iosFrameCallback(void)
 {
-    if (platform.appActive)
+    // With threaded game loop, this callback is only used for callback mode
+    // The game thread runs independently and doesn't wait for display link
+    if (platform.appActive && gameUpdateCallback != NULL)
     {
-        // If using callback mode, call the user's update function
-        if (gameUpdateCallback != NULL)
-        {
-            gameUpdateCallback();
-        }
-        else
-        {
-            // If using traditional game loop, signal that a frame is ready
-            platform.frameReady = true;
-        }
+        gameUpdateCallback();
     }
 }
 
-// Touch event callback
+// Touch event callback - called from main thread, pushes to queue for game thread
 // action: 0 = began, 1 = moved, 2 = ended, 3 = cancelled
 void _iosTouchEvent(int action, int index, float x, float y)
 {
-    if (index >= MAX_TOUCH_POINTS) return;
-
-    // Touch coordinates come in as points from UIKit
-    // No scaling needed since we're using screen points for rendering
-
-    switch (action)
-    {
-        case 0: // Touch began
-        {
-            CORE.Input.Touch.position[index] = (Vector2){ x, y };
-            CORE.Input.Touch.currentTouchState[index] = 1;
-            CORE.Input.Touch.pointId[index] = index;
-            CORE.Input.Touch.pointCount++;
-            if (CORE.Input.Touch.pointCount > MAX_TOUCH_POINTS)
-                CORE.Input.Touch.pointCount = MAX_TOUCH_POINTS;
-
-            // Map to mouse for single touch
-            if (index == 0)
-            {
-                CORE.Input.Mouse.currentPosition = (Vector2){ x, y };
-                CORE.Input.Mouse.currentButtonState[MOUSE_BUTTON_LEFT] = 1;
-            }
-
-#if defined(SUPPORT_GESTURES_SYSTEM)
-            GestureEvent gestureEvent = { 0 };
-            gestureEvent.touchAction = TOUCH_ACTION_DOWN;
-            gestureEvent.pointCount = CORE.Input.Touch.pointCount;
-            for (int i = 0; i < gestureEvent.pointCount; i++)
-            {
-                gestureEvent.pointId[i] = CORE.Input.Touch.pointId[i];
-                gestureEvent.position[i] = CORE.Input.Touch.position[i];
-            }
-            ProcessGestureEvent(gestureEvent);
-#endif
-        } break;
-
-        case 1: // Touch moved
-        {
-            CORE.Input.Touch.position[index] = (Vector2){ x, y };
-
-            if (index == 0)
-            {
-                CORE.Input.Mouse.previousPosition = CORE.Input.Mouse.currentPosition;
-                CORE.Input.Mouse.currentPosition = (Vector2){ x, y };
-            }
-
-#if defined(SUPPORT_GESTURES_SYSTEM)
-            GestureEvent gestureEvent = { 0 };
-            gestureEvent.touchAction = TOUCH_ACTION_MOVE;
-            gestureEvent.pointCount = CORE.Input.Touch.pointCount;
-            for (int i = 0; i < gestureEvent.pointCount; i++)
-            {
-                gestureEvent.pointId[i] = CORE.Input.Touch.pointId[i];
-                gestureEvent.position[i] = CORE.Input.Touch.position[i];
-            }
-            ProcessGestureEvent(gestureEvent);
-#endif
-        } break;
-
-        case 2: // Touch ended
-        case 3: // Touch cancelled
-        {
-            CORE.Input.Touch.position[index] = (Vector2){ x, y };
-            CORE.Input.Touch.currentTouchState[index] = 0;
-            CORE.Input.Touch.pointCount--;
-            if (CORE.Input.Touch.pointCount < 0) CORE.Input.Touch.pointCount = 0;
-
-            if (index == 0)
-            {
-                CORE.Input.Mouse.currentButtonState[MOUSE_BUTTON_LEFT] = 0;
-            }
-
-#if defined(SUPPORT_GESTURES_SYSTEM)
-            GestureEvent gestureEvent = { 0 };
-            gestureEvent.touchAction = TOUCH_ACTION_UP;
-            gestureEvent.pointCount = CORE.Input.Touch.pointCount;
-            for (int i = 0; i < gestureEvent.pointCount; i++)
-            {
-                gestureEvent.pointId[i] = CORE.Input.Touch.pointId[i];
-                gestureEvent.position[i] = CORE.Input.Touch.position[i];
-            }
-            ProcessGestureEvent(gestureEvent);
-#endif
-        } break;
-    }
+    // Push to thread-safe queue - will be processed by game thread in PollInputEvents
+    PushTouchEvent(action, index, x, y);
 }
 
 // App paused callback
@@ -924,6 +1028,36 @@ void SetPlatformView(void *view)
 void SetPlatformDisplayLink(void *displayLink)
 {
     platform.displayLink = (__bridge CADisplayLink *)displayLink;
+}
+
+// Start the game thread - call this from AppDelegate instead of calling GameInit directly
+// This spawns the game loop on a background thread, allowing the main thread to handle touches
+void StartGameThread(void)
+{
+    if (platform.gameThreadRunning) return;  // Already running
+
+    platform.gameThreadRunning = true;
+
+    // Detach EGL context from current thread before spawning game thread
+    // The game thread will make it current
+    if (platform.device != EGL_NO_DISPLAY)
+    {
+        eglMakeCurrent(platform.device, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    }
+
+    // Spawn game thread
+    int result = pthread_create(&platform.gameThread, NULL, GameThreadFunc, NULL);
+    if (result != 0)
+    {
+        TRACELOG(LOG_ERROR, "THREAD: Failed to create game thread: %d", result);
+        platform.gameThreadRunning = false;
+    }
+    else
+    {
+        // Detach thread so it cleans up automatically when done
+        pthread_detach(platform.gameThread);
+        TRACELOG(LOG_INFO, "THREAD: Game thread started successfully");
+    }
 }
 
 // EOF

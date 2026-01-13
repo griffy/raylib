@@ -114,6 +114,16 @@
 #endif
 
 //----------------------------------------------------------------------------------
+// iOS Platform Support
+//----------------------------------------------------------------------------------
+// On iOS, the entry point is UIApplicationMain() which calls AppDelegate.
+// AppDelegate spawns a game thread that calls GameInit(). This macro transparently
+// renames the user's main() to GameInit() so games work without modification.
+#if defined(PLATFORM_IOS)
+    #define main GameInit
+#endif
+
+//----------------------------------------------------------------------------------
 // Defines and Macros
 //----------------------------------------------------------------------------------
 #ifndef PI

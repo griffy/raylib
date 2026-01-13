@@ -24,12 +24,15 @@ static struct {
 } game = { 0 };
 
 //----------------------------------------------------------------------------------
-// Main Entry Point (called from AppDelegate)
+// Main Entry Point
+// NOTE: On iOS, raylib.h automatically renames main() to GameInit() via a macro,
+// so your game code works without modification on both desktop and iOS!
 //----------------------------------------------------------------------------------
-void GameInit(void)
+int main(void)
 {
-    // Initialize raylib - size is ignored on iOS (always fullscreen)
-    InitWindow(0, 0, "raylib iOS Example");
+    // Initialize raylib
+    // NOTE: On iOS, window size is ignored (always fullscreen)
+    InitWindow(800, 600, "raylib iOS Example");
     SetTargetFPS(60);
 
     // Initialize game state
@@ -134,4 +137,6 @@ void GameInit(void)
     }
 
     CloseWindow();
+
+    return 0;
 }

@@ -25,7 +25,12 @@ extern void _iosAppPaused(void);
 extern void _iosAppResumed(void);
 
 // Forward declaration - implement this in your game code
-extern void GameInit(void);
+// Note: When using PLATFORM_IOS, raylib.h renames main() to GameInit() automatically
+// so games compile without modification. The int return type is from main().
+extern int GameInit(void);
+
+// Starts the game loop on a background thread (allows main thread to handle touch events)
+extern void StartGameThread(void);
 
 //----------------------------------------------------------------------------------
 // RaylibView - Custom UIView with CAEAGLLayer for ANGLE rendering
@@ -131,9 +136,9 @@ extern void GameInit(void);
     [self.displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
     SetPlatformDisplayLink((__bridge void *)self.displayLink);
 
-    // Initialize raylib and run game loop
-    // NOTE: If using traditional game loop, GameInit() will block here
-    GameInit();
+    // Start the game loop on a background thread
+    // This allows the main thread to continue handling touch events
+    StartGameThread();
 }
 
 - (void)frameCallback:(CADisplayLink *)sender
