@@ -116,36 +116,34 @@ raylib's iOS platform layer (`src/platforms/rcore_ios.c`) uses:
 
 The platform layer is compiled as Objective-C via `src/rcore_objc.m` which includes `rcore.c`.
 
-## iOS-Specific Code Patterns
+## Writing Games for iOS
 
-### Callback-Based Rendering
+### Standard Game Loop
 
-iOS doesn't allow traditional game loops. Use `SetUpdateCallback`:
+raylib games work on iOS with no code changes! The standard game loop works exactly like desktop:
 
 ```c
-// Instead of this (desktop):
-while (!WindowShouldClose()) {
-    BeginDrawing();
-    // draw
-    EndDrawing();
-}
+int main(void)  // Or GameInit() when called from AppDelegate
+{
+    InitWindow(0, 0, "My Game");  // Size ignored on iOS (always fullscreen)
 
-// Use this (iOS):
-void GameUpdate(void) {
-    BeginDrawing();
-    // draw
-    EndDrawing();
-}
+    while (!WindowShouldClose())
+    {
+        // Update game logic
 
-void GameInit(void) {
-    InitWindow(0, 0, "My Game");
-    SetUpdateCallback(GameUpdate);
+        BeginDrawing();
+        // Draw
+        EndDrawing();
+    }
+
+    CloseWindow();
+    return 0;
 }
 ```
 
 ### Touch Input
 
-Touch is mapped to mouse events:
+Touch is automatically mapped to mouse events - no changes needed:
 
 ```c
 if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
@@ -153,7 +151,7 @@ if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
     // Handle tap
 }
 
-// Multi-touch
+// Multi-touch is also available
 int count = GetTouchPointCount();
 for (int i = 0; i < count; i++) {
     Vector2 pos = GetTouchPosition(i);
@@ -162,7 +160,7 @@ for (int i = 0; i < count; i++) {
 
 ### Screen Size
 
-Always fullscreen - InitWindow size is ignored:
+iOS apps are always fullscreen - InitWindow size parameters are ignored:
 
 ```c
 InitWindow(0, 0, "My Game");  // Size parameters don't matter

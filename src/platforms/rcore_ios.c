@@ -9,7 +9,6 @@
 *       - Single window only (iOS limitation)
 *       - No physical keyboard by default (external keyboard requires additional implementation)
 *       - Always fullscreen (iOS limitation)
-*       - Callback-based rendering required (iOS UIKit requirement)
 *
 *   POSSIBLE IMPROVEMENTS:
 *       - External keyboard support via UIKeyInput
@@ -80,6 +79,7 @@ typedef struct {
     // State
     bool appActive;                     // App is in foreground
     bool contextRebindRequired;         // Context needs rebinding after background
+    bool frameReady;                    // Frame is ready (set by CADisplayLink callback)
 } PlatformData;
 
 //----------------------------------------------------------------------------------
@@ -497,6 +497,19 @@ void PollInputEvents(void)
     // Register previous touch states
     for (int i = 0; i < MAX_TOUCH_POINTS; i++) CORE.Input.Touch.previousTouchState[i] = CORE.Input.Touch.currentTouchState[i];
 
+    // If using traditional game loop (no callback), wait for next frame
+    // This runs the iOS run loop until CADisplayLink signals a new frame
+    if (gameUpdateCallback == NULL)
+    {
+        platform.frameReady = false;
+        while (!platform.frameReady && platform.appActive && !CORE.Window.shouldClose)
+        {
+            // Run the run loop to process events (including CADisplayLink)
+            // Use kCFRunLoopDefaultMode which is compatible with NSRunLoopCommonModes
+            CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.016, true);
+        }
+    }
+
     // Register previous keys states
     for (int i = 0; i < MAX_KEYBOARD_KEYS; i++)
     {
@@ -753,9 +766,18 @@ static void CloseGraphicsDevice(void)
 // Frame callback - called by CADisplayLink
 void _iosFrameCallback(void)
 {
-    if (platform.appActive && (gameUpdateCallback != NULL))
+    if (platform.appActive)
     {
-        gameUpdateCallback();
+        // If using callback mode, call the user's update function
+        if (gameUpdateCallback != NULL)
+        {
+            gameUpdateCallback();
+        }
+        else
+        {
+            // If using traditional game loop, signal that a frame is ready
+            platform.frameReady = true;
+        }
     }
 }
 

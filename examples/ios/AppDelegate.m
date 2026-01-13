@@ -125,15 +125,15 @@ extern void GameInit(void);
 {
     [super viewDidAppear:animated];
 
-    // Initialize raylib now that view is ready
-    GameInit();
-
-    // Create display link for frame callbacks
+    // Create display link for frame callbacks FIRST (before GameInit blocks in game loop)
     self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(frameCallback:)];
     self.displayLink.preferredFramesPerSecond = 60;
     [self.displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
-
     SetPlatformDisplayLink((__bridge void *)self.displayLink);
+
+    // Initialize raylib and run game loop
+    // NOTE: If using traditional game loop, GameInit() will block here
+    GameInit();
 }
 
 - (void)frameCallback:(CADisplayLink *)sender
