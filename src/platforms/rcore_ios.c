@@ -221,14 +221,25 @@ static void ProcessTouchEvent(TouchEvent *event)
         case 3: // Touch cancelled
         {
             CORE.Input.Touch.position[index] = (Vector2){ x, y };
-            CORE.Input.Touch.currentTouchState[index] = 0;
+
+            // If the button was JUST pressed this frame (previous=0, current=1),
+            // don't clear it yet - let it persist so IsMouseButtonPressed can detect it.
+            // It will be cleared on the next frame's PollInputEvents.
+            bool justPressedThisFrame = (CORE.Input.Mouse.previousButtonState[MOUSE_BUTTON_LEFT] == 0) &&
+                                        (CORE.Input.Mouse.currentButtonState[MOUSE_BUTTON_LEFT] == 1);
+
+            if (!justPressedThisFrame)
+            {
+                CORE.Input.Touch.currentTouchState[index] = 0;
+                if (index == 0)
+                {
+                    CORE.Input.Mouse.currentButtonState[MOUSE_BUTTON_LEFT] = 0;
+                }
+            }
+            // else: keep the pressed state until next frame so the game can detect it
+
             CORE.Input.Touch.pointCount--;
             if (CORE.Input.Touch.pointCount < 0) CORE.Input.Touch.pointCount = 0;
-
-            if (index == 0)
-            {
-                CORE.Input.Mouse.currentButtonState[MOUSE_BUTTON_LEFT] = 0;
-            }
 
 #if defined(SUPPORT_GESTURES_SYSTEM)
             GestureEvent gestureEvent = { 0 };
@@ -267,15 +278,25 @@ static void DrainTouchQueue(void)
 // Game thread entry point
 static void *GameThreadFunc(void *arg)
 {
+    NSLog(@"[RAYLIB] GameThreadFunc started");
+
     // Make EGL context current on this thread
     if (platform.device != EGL_NO_DISPLAY)
     {
-        eglMakeCurrent(platform.device, platform.surface, platform.surface, platform.context);
+        NSLog(@"[RAYLIB] Making EGL context current...");
+        EGLBoolean result = eglMakeCurrent(platform.device, platform.surface, platform.surface, platform.context);
+        NSLog(@"[RAYLIB] eglMakeCurrent result: %d, error: 0x%04x", result, eglGetError());
         TRACELOG(LOG_INFO, "THREAD: EGL context made current on game thread");
+    }
+    else
+    {
+        NSLog(@"[RAYLIB] ERROR: platform.device is EGL_NO_DISPLAY!");
     }
 
     // Run the game (this contains the while(!WindowShouldClose()) loop)
+    NSLog(@"[RAYLIB] Calling GameInit()...");
     GameInit();
+    NSLog(@"[RAYLIB] GameInit() returned");
 
     platform.gameThreadRunning = false;
     return NULL;
@@ -591,9 +612,8 @@ void SwapScreenBuffer(void)
         eglSwapBuffers(platform.device, platform.surface);
     }
 
-    // On iOS, we need to run the run loop after swapping to process events
-    // and allow CADisplayLink to signal the next frame
-    PollInputEvents();
+    // NOTE: PollInputEvents is now called in BeginDrawing() for iOS
+    // to ensure touches are processed before game logic runs
 }
 
 //----------------------------------------------------------------------------------
@@ -811,37 +831,47 @@ void ClosePlatform(void)
 // Initialize graphics device (EGL/ANGLE)
 static int InitGraphicsDevice(void)
 {
+    NSLog(@"[RAYLIB] InitGraphicsDevice starting");
+
     // NOTE: UIKit objects (window, view, viewController) must be created
     // by the application's UIApplicationDelegate before calling InitPlatform()
 
     if (platform.view == nil)
     {
+        NSLog(@"[RAYLIB] ERROR: platform.view is nil!");
         TRACELOG(LOG_ERROR, "DISPLAY: iOS view not set. Create UIWindow/UIView in AppDelegate first.");
         return -1;
     }
+    NSLog(@"[RAYLIB] platform.view is set");
 
     // Get EGL display
+    NSLog(@"[RAYLIB] Calling eglGetDisplay...");
     platform.device = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     if (platform.device == EGL_NO_DISPLAY)
     {
+        NSLog(@"[RAYLIB] ERROR: eglGetDisplay returned EGL_NO_DISPLAY");
         TRACELOG(LOG_ERROR, "DISPLAY: Failed to get EGL display");
         return -1;
     }
+    NSLog(@"[RAYLIB] eglGetDisplay succeeded");
 
     // Initialize EGL
     EGLint major, minor;
+    NSLog(@"[RAYLIB] Calling eglInitialize...");
     if (!eglInitialize(platform.device, &major, &minor))
     {
+        NSLog(@"[RAYLIB] ERROR: eglInitialize failed, error: 0x%04x", eglGetError());
         TRACELOG(LOG_ERROR, "DISPLAY: Failed to initialize EGL");
         return -1;
     }
+    NSLog(@"[RAYLIB] EGL initialized: version %d.%d", major, minor);
     TRACELOG(LOG_INFO, "DISPLAY: EGL version: %d.%d", major, minor);
 
-    // Configure EGL
-    EGLint samples = 0;
-    if (CORE.Window.flags & FLAG_MSAA_4X_HINT) samples = 4;
+    // Configure EGL - try multiple configurations for compatibility
+    EGLint numConfigs = 0;
 
-    const EGLint configAttribs[] = {
+    // Try 1: OpenGL ES 3.0 with 24-bit depth
+    const EGLint configAttribs1[] = {
         EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
         EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
         EGL_RED_SIZE, 8,
@@ -850,16 +880,79 @@ static int InitGraphicsDevice(void)
         EGL_ALPHA_SIZE, 8,
         EGL_DEPTH_SIZE, 24,
         EGL_STENCIL_SIZE, 8,
-        EGL_SAMPLE_BUFFERS, (samples > 0) ? 1 : 0,
-        EGL_SAMPLES, samples,
         EGL_NONE
     };
 
-    EGLint numConfigs;
-    if (!eglChooseConfig(platform.device, configAttribs, &platform.config, 1, &numConfigs) || numConfigs == 0)
+    // Try 2: OpenGL ES 3.0 with 16-bit depth
+    const EGLint configAttribs2[] = {
+        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
+        EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+        EGL_RED_SIZE, 8,
+        EGL_GREEN_SIZE, 8,
+        EGL_BLUE_SIZE, 8,
+        EGL_ALPHA_SIZE, 8,
+        EGL_DEPTH_SIZE, 16,
+        EGL_NONE
+    };
+
+    // Try 3: OpenGL ES 2.0 with 24-bit depth
+    const EGLint configAttribs3[] = {
+        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+        EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+        EGL_RED_SIZE, 8,
+        EGL_GREEN_SIZE, 8,
+        EGL_BLUE_SIZE, 8,
+        EGL_ALPHA_SIZE, 8,
+        EGL_DEPTH_SIZE, 24,
+        EGL_STENCIL_SIZE, 8,
+        EGL_NONE
+    };
+
+    // Try 4: OpenGL ES 2.0 minimal
+    const EGLint configAttribs4[] = {
+        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+        EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+        EGL_RED_SIZE, 8,
+        EGL_GREEN_SIZE, 8,
+        EGL_BLUE_SIZE, 8,
+        EGL_DEPTH_SIZE, 16,
+        EGL_NONE
+    };
+
+    NSLog(@"[RAYLIB] Trying EGL config 1 (ES3, depth24)...");
+    if (eglChooseConfig(platform.device, configAttribs1, &platform.config, 1, &numConfigs) && numConfigs > 0)
     {
-        TRACELOG(LOG_ERROR, "DISPLAY: Failed to choose EGL config");
-        return -1;
+        NSLog(@"[RAYLIB] Config 1 succeeded");
+    }
+    else
+    {
+        NSLog(@"[RAYLIB] Config 1 failed, trying config 2 (ES3, depth16)...");
+        if (eglChooseConfig(platform.device, configAttribs2, &platform.config, 1, &numConfigs) && numConfigs > 0)
+        {
+            NSLog(@"[RAYLIB] Config 2 succeeded");
+        }
+        else
+        {
+            NSLog(@"[RAYLIB] Config 2 failed, trying config 3 (ES2, depth24)...");
+            if (eglChooseConfig(platform.device, configAttribs3, &platform.config, 1, &numConfigs) && numConfigs > 0)
+            {
+                NSLog(@"[RAYLIB] Config 3 succeeded");
+            }
+            else
+            {
+                NSLog(@"[RAYLIB] Config 3 failed, trying config 4 (ES2 minimal)...");
+                if (eglChooseConfig(platform.device, configAttribs4, &platform.config, 1, &numConfigs) && numConfigs > 0)
+                {
+                    NSLog(@"[RAYLIB] Config 4 succeeded");
+                }
+                else
+                {
+                    NSLog(@"[RAYLIB] All EGL configs failed! Error: 0x%04x", eglGetError());
+                    TRACELOG(LOG_ERROR, "DISPLAY: Failed to choose EGL config");
+                    return -1;
+                }
+            }
+        }
     }
 
     // Create window surface from iOS view's layer
@@ -926,6 +1019,7 @@ static int InitGraphicsDevice(void)
     // Set swap interval (vsync)
     eglSwapInterval(platform.device, (CORE.Window.flags & FLAG_VSYNC_HINT) ? 1 : 0);
 
+    NSLog(@"[RAYLIB] InitGraphicsDevice completed successfully!");
     return 0;
 }
 

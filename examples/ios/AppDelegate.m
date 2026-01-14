@@ -57,15 +57,13 @@ extern void StartGameThread(void);
 
         // Configure the Metal layer for ANGLE
         CAMetalLayer *metalLayer = (CAMetalLayer *)self.layer;
-        metalLayer.opaque = YES;
+        metalLayer.opaque = NO;  // Let UIView background show through before first render
         metalLayer.contentsScale = [[UIScreen mainScreen] scale];
         metalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
         metalLayer.framebufferOnly = NO;
 
         // Get the default Metal device
         metalLayer.device = MTLCreateSystemDefaultDevice();
-
-        self.backgroundColor = [UIColor blackColor];
     }
     return self;
 }
@@ -81,48 +79,44 @@ extern void StartGameThread(void);
                                           self.bounds.size.height * scale);
 }
 
-// Touch handling
+// Touch handling - only process touches that changed, use index 0 for primary touch
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
 {
-    NSArray *allTouches = [[event allTouches] allObjects];
-    for (NSUInteger i = 0; i < allTouches.count && i < 10; i++)
+    for (UITouch *touch in touches)
     {
-        UITouch *touch = allTouches[i];
         CGPoint location = [touch locationInView:self];
-        _iosTouchEvent(0, (int)i, location.x, location.y);
+        _iosTouchEvent(0, 0, location.x, location.y);  // action=began, index=0
+        break;  // Only handle first touch for now
     }
 }
 
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
 {
-    NSArray *allTouches = [[event allTouches] allObjects];
-    for (NSUInteger i = 0; i < allTouches.count && i < 10; i++)
+    for (UITouch *touch in touches)
     {
-        UITouch *touch = allTouches[i];
         CGPoint location = [touch locationInView:self];
-        _iosTouchEvent(1, (int)i, location.x, location.y);
+        _iosTouchEvent(1, 0, location.x, location.y);  // action=moved, index=0
+        break;
     }
 }
 
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
 {
-    NSArray *allTouches = [[event allTouches] allObjects];
-    for (NSUInteger i = 0; i < allTouches.count && i < 10; i++)
+    for (UITouch *touch in touches)
     {
-        UITouch *touch = allTouches[i];
         CGPoint location = [touch locationInView:self];
-        _iosTouchEvent(2, (int)i, location.x, location.y);
+        _iosTouchEvent(2, 0, location.x, location.y);  // action=ended, index=0
+        break;
     }
 }
 
 - (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
 {
-    NSArray *allTouches = [[event allTouches] allObjects];
-    for (NSUInteger i = 0; i < allTouches.count && i < 10; i++)
+    for (UITouch *touch in touches)
     {
-        UITouch *touch = allTouches[i];
         CGPoint location = [touch locationInView:self];
-        _iosTouchEvent(3, (int)i, location.x, location.y);
+        _iosTouchEvent(3, 0, location.x, location.y);  // action=cancelled, index=0
+        break;
     }
 }
 
@@ -141,29 +135,36 @@ extern void StartGameThread(void);
 - (void)viewDidLoad
 {
     [super viewDidLoad];
+    NSLog(@"[RAYLIB] viewDidLoad - bounds: %@", NSStringFromCGRect(self.view.bounds));
 
     // Create raylib view
     self.raylibView = [[RaylibView alloc] initWithFrame:self.view.bounds];
     self.raylibView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self.view addSubview:self.raylibView];
+    NSLog(@"[RAYLIB] Created RaylibView");
 
     // Pass view to raylib
     SetPlatformView((__bridge void *)self.raylibView);
+    NSLog(@"[RAYLIB] SetPlatformView called");
+
+    // Create display link for frame callbacks
+    self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(frameCallback:)];
+    self.displayLink.preferredFramesPerSecond = 60;
+    [self.displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+    SetPlatformDisplayLink((__bridge void *)self.displayLink);
+    NSLog(@"[RAYLIB] DisplayLink created and set");
+
+    // Start the game loop on a background thread
+    // Game will load assets while launch screen is visible, then call iOSShowWindow()
+    NSLog(@"[RAYLIB] About to call StartGameThread");
+    StartGameThread();
+    NSLog(@"[RAYLIB] StartGameThread returned");
 }
 
 - (void)viewDidAppear:(BOOL)animated
 {
     [super viewDidAppear:animated];
-
-    // Create display link for frame callbacks FIRST (before GameInit blocks in game loop)
-    self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(frameCallback:)];
-    self.displayLink.preferredFramesPerSecond = 60;
-    [self.displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
-    SetPlatformDisplayLink((__bridge void *)self.displayLink);
-
-    // Start the game loop on a background thread
-    // This allows the main thread to continue handling touch events
-    StartGameThread();
+    NSLog(@"[RAYLIB] viewDidAppear");
 }
 
 - (void)frameCallback:(CADisplayLink *)sender
@@ -206,19 +207,26 @@ extern void StartGameThread(void);
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
 {
+    NSLog(@"[RAYLIB] application:didFinishLaunchingWithOptions");
+
     // Create window
     self.window = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
+    NSLog(@"[RAYLIB] Window created: %@", NSStringFromCGRect(self.window.bounds));
 
     // Create view controller
     RaylibViewController *viewController = [[RaylibViewController alloc] init];
     self.window.rootViewController = viewController;
+    NSLog(@"[RAYLIB] ViewController created");
 
-    // Pass to raylib
+    // Pass window/VC to raylib
     SetPlatformWindow((__bridge void *)self.window);
     SetPlatformViewController((__bridge void *)viewController);
+    NSLog(@"[RAYLIB] Platform window and VC set");
 
-    // Show window
+    // Show window - the RaylibView background matches the launch screen,
+    // so the transition is seamless even before the first frame renders
     [self.window makeKeyAndVisible];
+    NSLog(@"[RAYLIB] Window made key and visible");
 
     return YES;
 }

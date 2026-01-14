@@ -477,6 +477,9 @@ void InitAudioDevice(void)
     config.sampleRate = AUDIO_DEVICE_SAMPLE_RATE;
     config.dataCallback = OnSendAudioDataToDevice;
     config.pUserData = NULL;
+#if defined(PLATFORM_IOS)
+    config.periodSizeInFrames = 4096;  // Larger buffer to prevent underruns on iOS
+#endif
 
     result = ma_device_init(&AUDIO.System.context, &config, &AUDIO.System.device);
     if (result != MA_SUCCESS)
