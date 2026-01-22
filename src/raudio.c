@@ -457,6 +457,10 @@ void InitAudioDevice(void)
     // Init audio context
     ma_context_config ctxConfig = ma_context_config_init();
     ma_log_callback_init(OnLog, NULL);
+#if defined(PLATFORM_IOS)
+    // Configure iOS audio session for reliable playback
+    ctxConfig.coreaudio.sessionCategory = ma_ios_session_category_playback;
+#endif
 
     ma_result result = ma_context_init(NULL, 0, &ctxConfig, &AUDIO.System.context);
     if (result != MA_SUCCESS)

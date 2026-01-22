@@ -37,6 +37,11 @@ extern void StartGameThread(void);
 // RaylibView - Custom UIView with CAMetalLayer for ANGLE rendering
 //----------------------------------------------------------------------------------
 @interface RaylibView : UIView
+{
+    // Touch tracking - map UITouch pointers to indices (0-9)
+    NSMutableDictionary<NSValue *, NSNumber *> *touchIndexMap;
+    int nextTouchIndex;
+}
 @end
 
 @implementation RaylibView
@@ -55,6 +60,10 @@ extern void StartGameThread(void);
         self.multipleTouchEnabled = YES;
         self.userInteractionEnabled = YES;
 
+        // Initialize touch tracking
+        touchIndexMap = [[NSMutableDictionary alloc] init];
+        nextTouchIndex = 0;
+
         // Configure the Metal layer for ANGLE
         CAMetalLayer *metalLayer = (CAMetalLayer *)self.layer;
         metalLayer.opaque = NO;  // Let UIView background show through before first render
@@ -64,6 +73,9 @@ extern void StartGameThread(void);
 
         // Get the default Metal device
         metalLayer.device = MTLCreateSystemDefaultDevice();
+
+        // Match launch screen background color for seamless transition
+        self.backgroundColor = [UIColor colorWithRed:1.0/255.0 green:25.0/255.0 blue:44.0/255.0 alpha:1.0];
     }
     return self;
 }
@@ -79,14 +91,44 @@ extern void StartGameThread(void);
                                           self.bounds.size.height * scale);
 }
 
-// Touch handling - only process touches that changed, use index 0 for primary touch
+// Get or assign a touch index for the given UITouch
+- (int)indexForTouch:(UITouch *)touch
+{
+    NSValue *key = [NSValue valueWithPointer:(__bridge const void *)touch];
+    NSNumber *existing = touchIndexMap[key];
+    if (existing != nil)
+    {
+        return [existing intValue];
+    }
+
+    // Assign new index (max 10 touches, indices 0-9)
+    int index = nextTouchIndex % 10;
+    nextTouchIndex++;
+    touchIndexMap[key] = @(index);
+    return index;
+}
+
+// Remove touch from tracking
+- (void)removeTouch:(UITouch *)touch
+{
+    NSValue *key = [NSValue valueWithPointer:(__bridge const void *)touch];
+    [touchIndexMap removeObjectForKey:key];
+
+    // Reset index counter when no touches remain
+    if (touchIndexMap.count == 0)
+    {
+        nextTouchIndex = 0;
+    }
+}
+
+// Touch handling - process all touches with proper indices for multi-touch gestures
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
 {
     for (UITouch *touch in touches)
     {
+        int index = [self indexForTouch:touch];
         CGPoint location = [touch locationInView:self];
-        _iosTouchEvent(0, 0, location.x, location.y);  // action=began, index=0
-        break;  // Only handle first touch for now
+        _iosTouchEvent(0, index, location.x, location.y);  // action=began
     }
 }
 
@@ -94,9 +136,9 @@ extern void StartGameThread(void);
 {
     for (UITouch *touch in touches)
     {
+        int index = [self indexForTouch:touch];
         CGPoint location = [touch locationInView:self];
-        _iosTouchEvent(1, 0, location.x, location.y);  // action=moved, index=0
-        break;
+        _iosTouchEvent(1, index, location.x, location.y);  // action=moved
     }
 }
 
@@ -104,9 +146,10 @@ extern void StartGameThread(void);
 {
     for (UITouch *touch in touches)
     {
+        int index = [self indexForTouch:touch];
         CGPoint location = [touch locationInView:self];
-        _iosTouchEvent(2, 0, location.x, location.y);  // action=ended, index=0
-        break;
+        _iosTouchEvent(2, index, location.x, location.y);  // action=ended
+        [self removeTouch:touch];
     }
 }
 
@@ -114,9 +157,10 @@ extern void StartGameThread(void);
 {
     for (UITouch *touch in touches)
     {
+        int index = [self indexForTouch:touch];
         CGPoint location = [touch locationInView:self];
-        _iosTouchEvent(3, 0, location.x, location.y);  // action=cancelled, index=0
-        break;
+        _iosTouchEvent(3, index, location.x, location.y);  // action=cancelled
+        [self removeTouch:touch];
     }
 }
 
