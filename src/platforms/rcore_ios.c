@@ -240,6 +240,10 @@ static void ProcessTouchEvent(TouchEvent *event)
 
             CORE.Input.Touch.pointCount--;
             if (CORE.Input.Touch.pointCount < 0) CORE.Input.Touch.pointCount = 0;
+            NSLog(@"[RAYLIB] Touch ended: index=%d, pointCount=%d, buttonState=%d, prevState=%d",
+                  index, CORE.Input.Touch.pointCount,
+                  CORE.Input.Mouse.currentButtonState[MOUSE_BUTTON_LEFT],
+                  CORE.Input.Mouse.previousButtonState[MOUSE_BUTTON_LEFT]);
 
 #if defined(SUPPORT_GESTURES_SYSTEM)
             GestureEvent gestureEvent = { 0 };
@@ -269,6 +273,17 @@ static void DrainTouchQueue(void)
     }
 
     pthread_mutex_unlock(&platform.touchQueue.mutex);
+
+    // Fix for quick taps: if no touches are active but button is still pressed, clear it
+    // This handles the case where justPressedThisFrame prevented clearing on touch end
+    if ((CORE.Input.Touch.pointCount == 0) && (CORE.Input.Mouse.currentButtonState[MOUSE_BUTTON_LEFT] == 1))
+    {
+        // Only clear if it wasn't just pressed this frame (allow IsMouseButtonPressed to work)
+        if (CORE.Input.Mouse.previousButtonState[MOUSE_BUTTON_LEFT] == 1)
+        {
+            CORE.Input.Mouse.currentButtonState[MOUSE_BUTTON_LEFT] = 0;
+        }
+    }
 }
 
 //----------------------------------------------------------------------------------
